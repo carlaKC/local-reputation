@@ -54,6 +54,10 @@ func newReputationTracker(clock clock.Clock, params ManagerParams,
 
 	generalSlots := info.InFlightHTLC - (info.InFlightHTLC*params.ProtectedPercentage)/100
 
+	log.Infof("Creating reputation tracker for: %v with %v slots and %v "+
+		"liquidity (/%v in flight limit)", generalLiquidity, generalSlots,
+		info.InFlightLiquidity)
+
 	return &reputationTracker{
 		bidirectionalRevenue: newDecayingAverage(
 			clock, params.RevenueWindow, history.Revenue,
@@ -215,6 +219,12 @@ func (r *reputationTracker) MayAddOutgoing(reputation ReputationCheck,
 			generalLiquidityOccuplied += htlc.amount
 		}
 	}
+
+	r.log.Infof("Outgoing channel: %v(/%v) slots and %v(/%v)"+
+		"liquidity occupied checking htlc endorsed: %v",
+		generalSlotsOccupied, r.generalSlots,
+		generalLiquidityOccuplied, r.generalLiquidity,
+		incomingEndorsed)
 
 	if generalSlotsOccupied+1 > r.generalSlots {
 		return ForwardOutcomeNoResources
