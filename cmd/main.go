@@ -383,6 +383,16 @@ func writeNetworkData(path string, records []networkReputation) error {
 	baseName := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	filePath := baseName + "_reputations.csv"
 
+	sort.Slice(records, func(i, j int) bool {
+		if records[i].node != records[j].node {
+			return records[i].node < records[j].node
+		}
+		if records[i].chanIn != records[j].chanIn {
+			return records[i].chanIn < records[j].chanIn
+		}
+		return records[i].chanOut < records[j].chanOut
+	})
+
 	// Create and open the CSV file
 	file, err := os.Create(filePath)
 	if err != nil {
