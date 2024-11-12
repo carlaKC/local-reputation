@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/carlakc/lrc"
 	"github.com/lightningnetwork/lnd/clock"
 	"github.com/lightningnetwork/lnd/lnwire"
+	"github.com/xhit/go-str2duration/v2"
 )
 
 func main() {
@@ -44,6 +46,36 @@ func main() {
 		os.Exit(1)
 	}
 
+	var attacker *filterAttacker
+	if len(os.Args) > 2 {
+		if len(os.Args) != 4 {
+			fmt.Println("Expect basedir attacker_id duration when running with filter")
+			os.Exit(1)
+		}
+
+		duration, err := str2duration.ParseDuration(os.Args[3])
+		if err != nil {
+			fmt.Println("Invalid duration format:", err)
+			return
+		}
+
+		channelId, err := strconv.ParseUint(os.Args[2], 10, 64)
+		if err != nil {
+			fmt.Println("Invalid integer for chan id:", err)
+			os.Exit(1)
+		}
+
+		attacker = &filterAttacker{
+			attackerChannel: lnwire.NewShortChanIDFromInt(
+				uint64(channelId),
+			),
+			timePeriod: duration,
+		}
+
+		fmt.Printf("Only bootstrapping attacker channel %v for %v\n",
+			attacker.attackerChannel, attacker.timePeriod)
+	}
+
 	network, err := processForwards(
 		fwds, clock.NewDefaultClock(),
 		lrc.ManagerParams{
@@ -52,7 +84,7 @@ func main() {
 			ProtectedPercentage:  50,
 			ResolutionPeriod:     time.Second * 90,
 			BlockTime:            5,
-		},
+		}, attacker,
 	)
 	if err != nil {
 		fmt.Println("Could not bootstrap network ", err)
@@ -194,11 +226,20 @@ func readCSV(reader *csv.Reader) ([]*NetworkForward, error) {
 	return forwardedHTLCs, nil
 }
 
+type filterAttacker struct {
+	timePeriod      time.Duration
+	attackerChannel lnwire.ShortChannelID
+}
+
 func processForwards(forwards []*NetworkForward, clock clock.Clock,
-	params lrc.ManagerParams) (
+	params lrc.ManagerParams, filterAttacker *filterAttacker) (
 	map[string]map[lnwire.ShortChannelID]*lrc.ChannelBoostrap, error) {
 
 	nodes := make(map[string]map[lnwire.ShortChannelID]*lrc.ChannelBoostrap)
+	var startTime time.Time
+	sort.Slice(forwards, func(i, j int) bool {
+		return forwards[i].TimestampAdded.Before(forwards[j].TimestampAdded)
+	})
 
 	for _, h := range forwards {
 		channels, ok := nodes[h.NodeAlias]
@@ -206,6 +247,22 @@ func processForwards(forwards []*NetworkForward, clock clock.Clock,
 			channels = make(
 				map[lnwire.ShortChannelID]*lrc.ChannelBoostrap,
 			)
+		}
+
+		// Set a start time to the earliest value we have in the file.
+		if startTime.IsZero() {
+			startTime = h.ForwardedHTLC.TimestampAdded
+		}
+
+		// If we're limiting the attacker's history, skip over forward
+		// once we've bootstrapped the required period of history.
+		if filterAttacker != nil &&
+			h.OutgoingChannel == filterAttacker.attackerChannel {
+
+			cutoff := startTime.Add(filterAttacker.timePeriod)
+			if h.ForwardedHTLC.TimestampAdded.After(cutoff) {
+				continue
+			}
 		}
 
 		incoming, ok := channels[h.IncomingChannel]
